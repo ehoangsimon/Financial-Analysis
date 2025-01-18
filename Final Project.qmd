@@ -1,0 +1,1493 @@
+---
+title: "**Final Project: Stock Market Prediction**"
+subtitle: "Ella Hoang-Simon"
+format: 
+  html:
+    toc: true
+    toc-location: left
+    page-layout: full
+    df-print: kable
+    fontsize: 1.0em
+    embed-resources: true
+---
+
+***Introduction:***This project focuses on the analysis and forecasting of stock returns, both at an individual stock level and as part of a self-constructed portfolio. The primary goal is to assess the historical behavior of returns and predict future trends using advanced machine learning techniques.
+
+# Importing packages
+
+Installing packages
+
+```{r}
+# install.packages("tidyverse") 
+#install.packages(c("forecast", "quantmod","RcppRoll", "rugarch", "fGarch"))
+# install.packages(c("fable", "tsibble", "feasts", "keras", "highcharter", "plotly", "dplyr", "lubridate"))
+#install.packages("ggplot2")
+# install.packages("feasts")
+#install.packages("tseries")
+# install.packages("urca") # for KPSS
+# install.packages("ggcorrplot")
+#install.packages("fabletools")
+#install.packages("tibble")
+#install.packages("RColorBrewer")
+#install.packages("reshape2")
+#install.packages("tidyr")
+#install.packages("xts")
+#install.packages("highcharter")
+#install.packages("cowplot")
+#install.packages("purrr") 
+#install.packages("lmtest")
+#install.packages('slider')
+# install.packages(c("caret", "lightgbm"))
+#install.packages(c("keras", "randomForest")) 
+```
+
+Loading packages
+
+```{r}
+library(keras)
+library(randomForest)
+library(fabletools)
+library(ggplot2)
+library(lubridate)
+library(tsibble)
+library(dplyr)
+library(ggcorrplot)
+library(feasts)
+library(urca)
+library(tseries)
+library(tibble)
+library(tidyr)
+library(reshape2)
+library(RColorBrewer)
+library(highcharter)
+library(xts)
+library(cowplot)
+library(plotly)
+library(forecast)
+library(purrr)   
+library(lmtest)
+library(slider)
+library(caret)
+library(lightgbm)
+library(tidyverse)
+```
+
+# Data Wrangling
+
+## Loading the data
+
+```{r}
+load("3_stock_market_prediction.RData") # Loading Data file
+stocks <- stocks_clean    # Storing data in a variable named stocks
+rm(stocks_clean)          # Removing original file
+```
+
+## Description of Features
+
+```{r}
+# looking at the first and last observations of the data
+head(stocks)            
+tail(stocks)       
+```
+
+We can already see some missing values, this will be handled later on.
+
+-   ***ticker*** represents the company's publicly shares which allows us to identify the company's performance
+
+-   ***date*** the date the data was taken from. We can see it is in yyyy/mm/dd format. ***We will adjust this later on***. The stocks data is provided once a month, so we see dates occurring on the last day of each month.
+
+-   ***price*** in USD of the stock.
+
+-   ***market_cap*** is the market capitalization which in measured in millions??? Changes in market_cap can reflect how the stock price and potentially the number of outstanding shares evolved over time.
+
+-   ***price_to_book*** is a ratio that compares a company's current market price per share to its book value per share.
+
+-   ***debt_to_equity*** represents the proportion of a company's financing that comes from debt compared to equity. This can be important when choosing an investment strategy.\
+
+-   ***profitability*** margin represents the measure of a company's ability to generate profit relative to its revenue.
+
+-   ***volatility*** standard deviation of returns)
+
+-   ***revenue*** is a key metric for evaluating a company’s stock performance and measures the company's financial health.
+
+-   ***ghg_s1-s3*** represents scope 1, 2 and 3 of greenhouse gas emissions.
+
+-   ***return*** refers to the profit or loss made by an investor from owning a stock over a specific period. In our case the period of time is one day.
+
+As we can see there are not too many features, but each feature represents important internal and external representations of a stocks financial viability. Thus, they are all relevant to be used in predicting stocks future ***returns***.
+
+```{r}
+# Counting the number of unique tickers
+unique(stocks$ticker)
+```
+
+There are 886 different companies represented.
+
+## Shape and Distribution of the Dataset
+
+```{r}
+# getting the shape and date type. 
+str(stocks)
+```
+
+We can confirm that we in fact have 13 features and 289,271 rows. We have one categorical column, ***ticker***. One date column, ***date***, and the rest are all quantitative continuous variables. Our date column should be adjusted to a standardized format and to date data type.
+
+```{r}
+# looking at the distribution of the quantitative variables 
+summary(stocks)
+```
+***Remarks:*** Missing values and high skewness in emissions data could limit their utility unless imputed or transformed. There are very large ranges in columns such as Revenue, Market_cap, profitability. 
+Some variabels have negative values which will be further investigated (as it can impact our analysis).
+```{r}
+# adjust formatting of the date column to be standardized (day/month/year)
+stocks$date <- as.Date(stocks$date, format = "%d/%m/%Y")
+```
+
+I will create factors from my ticker, so that they will be numeric in modeling yet retain its categorical nature.
+
+```{r}
+# saving the ticker column as factor
+stocks$ticker <- as.factor(stocks$ticker)
+
+# ensuring that ticker is now factorized
+str(stocks)
+```
+
+To best handle temporal data, I will turn the data into a ***tsibble*** object. In this structure, the data will be indexed by time(day, month, year).
+
+```{r}
+# Ensure your tsibble is correctly indexed
+stocks <- as_tsibble(stocks, index = date, key = ticker)
+```
+
+```{r}
+# Ensuring that my variable stocks is in fact a tsibble object
+class(stocks)
+
+# Confirming that the key is ticker
+key(stocks)
+```
+
+-   Our Dataset has been correctly converted into a tsibble (tbl_ts) which is a time-series tibble.
+-   The Dataset is now indexed by 'date', which correctly sets the Dataset up for future time-series analysis. The key confirmed as the 'ticker'.
+
+## Univariate Analysis
+
+### Distribution Analysis
+
+To better understand the distribution of each feature, I will plot histograms. I will not plot the distribution of the ghg variables due to missing values (covered in a future section). Instead I will rely on the previous summary that was given.
+
+```{r, fig.width = 12, fig.height = 50}
+# Calculate median for price, volatility since the histogram is VERY distributed
+median_price <- median(stocks$price, na.rm = TRUE)                            # dropping NA just for the purpose of plotting
+median_vol <- median(stocks$volatility, na.rm = TRUE) 
+median_mc <- median(stocks$market_cap, na.rm = TRUE) 
+median_btm <- median(stocks$market_cap, na.rm = TRUE) 
+median_dte <- median(stocks$debt_to_equity, na.rm = TRUE) 
+median_rev <- median(stocks$revenue, na.rm = TRUE) 
+median_prof <- median(stocks$profitability, na.rm = TRUE) 
+
+hist_return <- ggplot(stocks, aes(x = return)) +                              # Creating first graph for returns
+  geom_histogram(binwidth = 0.75, fill = "darkblue", color = "black") +       # Adjusting fill, outline and bin width
+  stat_bin(binwidth = 0.75, geom = "text", aes(label = after_stat(count)), vjust = -0.5, color = "black") +
+  labs(title = "Histogram of Returns", y = "", x = "") +                      # Add title, remove x and y axis
+  theme_minimal() +
+  theme(plot.title = element_text(face = "bold", hjust = 0.5),
+        panel.background = element_rect(fill = "white"),                      # Panel background is white
+        plot.background = element_rect(fill = "white")) +                       # Entire plot background is white
+  scale_x_continuous(labels = scales::comma) +                                # Expands and formats x-axis labels
+  scale_y_continuous(labels = scales::comma)                                 # Expands and formats y-axis labels
+
+hist_price <- ggplot(stocks, aes(x = price)) +                                # Creating graph for price
+  geom_histogram(binwidth = 100, fill = "darkblue", color = "black") +        
+  geom_vline(aes(xintercept = median_price), color = "red", linetype = "dashed", size = .75) +  # Add median line
+  labs(title = "Histogram of Price", y = "", x = "") +            
+  theme_minimal() +
+  theme(plot.title = element_text(face = "bold", hjust = 0.5),
+        panel.background = element_rect(fill = "white"),
+        plot.background = element_rect(fill = "white") +
+  scale_x_continuous(labels = scales::comma) +                               
+  scale_y_continuous(labels = scales::comma))                             
+
+hist_vol <- ggplot(stocks, aes(x = volatility)) +                             # Creating graph for volatility
+  geom_histogram(binwidth = 150, fill = "darkblue", color = "black") +        
+  geom_vline(aes(xintercept = median_vol), color = "red", linetype = "dashed", size = .75) +  # Add median line
+  stat_bin(binwidth = 150, geom = "text", aes(label = after_stat(count)), vjust = -0.5, color = "black", size = 2.75) +
+  labs(title = "Histogram of Volatility", y = "", x = "") +                   # Add title, remove x and y axis
+  theme_minimal() +
+  theme(plot.title = element_text(face = "bold", hjust = 0.5),
+        panel.background = element_rect(fill = "white"),                     
+        plot.background = element_rect(fill = "white")) +
+  scale_x_continuous(labels = scales::comma) +                              
+  scale_y_continuous(labels = scales::comma)                                  
+
+hist_mc <- ggplot(stocks, aes(x = market_cap)) +                              # Creating graph for market cap
+  geom_histogram(binwidth = 100000, fill = "darkblue", color = "black") +     
+  geom_vline(aes(xintercept = median_mc), color = "red", linetype = "dashed", size = .75) +  # Add median line
+  stat_bin(binwidth = 100000, geom = "text", aes(label = after_stat(count)), vjust = -0.5, color = "black", size = 2.75) +
+  labs(title = "Histogram of Market Capitalization", y = "", x = "") +        
+  theme_minimal() +
+  theme(plot.title = element_text(face = "bold", hjust = 0.5),
+        panel.background = element_rect(fill = "white"),
+        plot.background = element_rect(fill = "white")) +
+  scale_x_continuous(labels = scales::comma) +                               
+  scale_y_continuous(labels = scales::comma)                                
+
+hist_btm <- ggplot(stocks, aes(x = price_to_book)) +                          # Creating graph for price to book
+  geom_histogram(binwidth = 10000, fill = "darkblue", color = "black") +     
+  geom_vline(aes(xintercept = median_btm), color = "red", linetype = "dashed", size = .75) +  
+  stat_bin(binwidth = 10000, geom = "text", aes(label = after_stat(count)), vjust = -0.5, color = "black", size = 2.75) +
+  labs(title = "Histogram of Price to Book", y = "", x = "") +            
+  theme_minimal() +
+  theme(plot.title = element_text(face = "bold", hjust = 0.5),
+        panel.background = element_rect(fill = "white"),
+        plot.background = element_rect(fill = "white")) +
+  scale_x_continuous(labels = scales::comma) +                                
+  scale_y_continuous(labels = scales::comma)                                 
+
+hist_dte <- ggplot(stocks, aes(x = debt_to_equity)) +                         # Creating debt to equity graph
+  geom_histogram(binwidth = 100000, fill = "darkblue", color = "black") + 
+  geom_vline(aes(xintercept = median_dte), color = "red", linetype = "dashed", size = .75) +  
+  stat_bin(binwidth = 100000, geom = "text", aes(label = after_stat(count)), vjust = -0.5, color = "black", size = 2.75) +
+  labs(title = "Histogram of Debt to Equity", y = "", x = "") +              
+  theme_minimal() +
+  theme(plot.title = element_text(face = "bold", hjust = 0.5),
+        panel.background = element_rect(fill = "white"),
+        plot.background = element_rect(fill = "white")) +
+  scale_x_continuous(labels = scales::comma) +                               
+  scale_y_continuous(labels = scales::comma)                                 
+
+hist_rev <- ggplot(stocks, aes(x = revenue)) +                                # creating revenue graph
+  geom_histogram(binwidth = 1005000, fill = "darkblue", color = "black") +    
+  geom_vline(aes(xintercept = median_rev), color = "red", linetype = "dashed", size = .75) + 
+  stat_bin(binwidth = 1005000, geom = "text", aes(label = after_stat(count)), vjust = -0.5, color = "black", size = 2.75) +
+  labs(title = "Histogram of Revenue", y = "", x = "") +              
+  theme_minimal() +
+  theme(plot.title = element_text(face = "bold", hjust = 0.5),
+        panel.background = element_rect(fill = "white"),
+        plot.background = element_rect(fill = "white")) +
+  scale_x_continuous(labels = scales::comma) +                            
+  scale_y_continuous(labels = scales::comma)                                 
+
+hist_p <- ggplot(stocks, aes(x = profitability)) +                           # creating revenue graph
+  geom_histogram(binwidth = 100000, fill = "darkblue", color = "black") +    # Adjusting fill, outline and bin width
+  geom_vline(aes(xintercept = median_prof), color = "red", linetype = "dashed", size = .75) +  # Add median line
+  stat_bin(binwidth = 100000, geom = "text", aes(label = after_stat(count)), vjust = -0.5, color = "black", size = 2.75) +
+  labs(title = "Histogram of Profitability", y = "", x = "") +               # Add title, remove x and y axis
+  theme_minimal() +
+  theme(plot.title = element_text(face = "bold", hjust = 0.5),
+        panel.background = element_rect(fill = "white"),
+        plot.background = element_rect(fill = "white"))+
+  scale_x_continuous(labels = scales::comma) +                                # Expands and formats x-axis labels
+  scale_y_continuous(labels = scales::comma)                                  # Expands and formats y-axis labels
+
+cowplot::save_plot("histograms.png", 
+                   plot_grid(hist_p, hist_rev, hist_dte, hist_btm, hist_mc, hist_return, hist_price, hist_vol, 
+                             ncol = 2, nrow = 4), 
+                   base_width = 15, base_height = 50, 
+                   limitsize = FALSE)  
+
+plot_grid(hist_p, hist_rev, hist_dte, hist_btm, nrow = 4)             # plotting separately for space purposes, a better view can be seen on the saved image
+plot_grid(hist_mc, hist_return, hist_price, hist_vol, nrow = 4)
+```
+
+Will delete all the saved histograms to clear the environment.
+
+```{r}
+rm(hist_btm, hist_dte, hist_mc, hist_p, hist_price, hist_return, hist_rev, hist_vol, median_btm, median_dte, median_mc, median_price, median_rev, median_prof, median_vol)
+
+```
+
+## Bivariate Analysis
+
+### Correlation Analysis
+
+```{r}
+# Saving a list of quantitative variables into a variable named 'quantitative_cols'
+quantitative_cols <- c("price", "return", "volatility", "revenue", "profitability", "ghg_s1", "ghg_s2", "ghg_s3", "market_cap", "price_to_book","debt_to_equity")
+```
+
+```{r, fig.width = 6, fig.height = 6}
+# Create correlation matrix - specifying Spearman because it is non-parametric and doesn't assume linearity. 
+cor_matrix <- cor(stocks[, quantitative_cols], use = "pairwise.complete.obs", method = "spearman")
+
+# Plot the correlation matrix
+ggcorrplot(cor_matrix, 
+           lab = TRUE,                       # Add annotations
+           lab_size = 3) +                   # changing annotation font size
+    labs(title = "Spearman Correlation Heatmap") # Adding title
+
+```
+
+The green house gas emission variables are moderately positively correlated with each other. Market_cap and revenue and price are highly correlated. The ghg variables have virtually no effect on the returns variable. This makes sense because these values are inherently related to the price of a share.
+
+### Examining maximum and minimum returns for each ticker
+
+In order to determine the best investment strategy, I would like to look at how certain companies returns perform over time. This may give a helpful indication of which companies are relative stable or less prone to economic events.
+
+```{r}
+# Summarize top 10 highest and lowest returns for each ticker for each year
+stocks <- stocks |> mutate(year = year(date))                          # Adding a new column 'year' with the year 
+
+highest_returns_by_year <- stocks |>                                   # using stocks tsibble
+  group_by(year, ticker) |>                                            # Grouping by year and ticker
+  summarize(highest_return = max(return),.groups = 'drop') |>          # Aggregating by max return and resetting the grouping structure after summarizing
+  group_by(year) |>                                                    # grouping the summarized data by year
+  top_n(10, highest_return) |>                                         # top 10 tickers with the highest returns
+  arrange(year, desc(highest_return))                                  # ordering the result by year, then returns in ascending order
+
+lowest_returns_by_year <- stocks |>                                    # repeating the same process as above but with the top 10 lowest returns and their ticker each year
+  group_by(year, ticker) |>
+  summarize(lowest_return = min(return),.groups = 'drop') |>
+  group_by(year) |>
+  top_n(10, -lowest_return) |>
+  arrange(year, lowest_return)                                         # Ascending order
+
+# Show results
+print(highest_returns_by_year)
+print(lowest_returns_by_year)
+```
+
+I will graph the results for to look at overall patterns.
+
+```{r, fig.width = 12, fig.height = 6}
+# Combine the highest and lowest returns dataframes
+combined_returns <- bind_rows(
+  highest_returns_by_year |> 
+    mutate(return_type = "Highest Return", return_value = highest_return) |>
+    select(year, ticker, return_type, return_value),
+  lowest_returns_by_year |>
+    mutate(return_type = "Lowest Return", return_value = lowest_return) |>
+    select(year, ticker, return_type, return_value)
+)
+
+# Create a side-by-side bar plot with ticker names
+plot_ly(
+  data = combined_returns, 
+  x = ~factor(year), 
+  y = ~return_value, 
+  color = ~return_type, 
+  text = ~ticker,                                              # Add ticker names as text labels
+  hoverinfo = 'text+y',                                        # Display ticker and return value in hover
+  type = 'bar', 
+  barmode = 'group',                                           # Choosing side by side bar plots
+  colors = c("green", "red")                                   # Value indication coloring
+) |>
+  layout(
+    title = "Top 10 Highest and Lowest Returns by Year",
+    xaxis = list(title = "Year"),
+    yaxis = list(title = "Return"),
+    legend = list(title = list(text = "Return Type"))
+  )
+
+```
+
+This bar graph shows a stacked bar graph for the data queried int he previous chunk. We observe the top 10 highest and lowest stops and the whole bar depicting the sum of that groups returns. From this we can see multiple tickers that appear in both the top 10 highest and lowest. This asserts a high level of volatility, which is not what we want for our portfolio. Additionally we can get a better idea of which tickers are more susceptible to negative economic events while some are less. After COVID-19, we can see that there are significant spikes in returns as well as significant decreases. Regarding a trading strategy, adding one of the companies that did well during COVID-19 may assert a resistance to some of the external factors.
+
+### Analysis of Covariance
+
+In order to have a better idea of which stocks will best represent the market in different ways, covariance needs to be analyzed.
+
+I will use the top 10 performing stocks from the years 1995- 2022 and analyze the covariance between these top performing stocks.
+
+```{r}
+# Getting a list of the unique tickers from the 'highest_returns_by_year' DataFrame
+top_tickers <- highest_returns_by_year |>                                    # Saving into a variable named 'top_tickers'
+  pull(ticker) |>                                                            # Extract ticker column
+  unique()                                                                   # Return unique values from extracted column
+
+print(top_tickers)                                                           # Print the unique tickers
+```
+
+117 unique tickers are in the top 10 returns across the 27 year period. Now, I will analyze the covariance between these stocks to create a diversified portfolio.
+
+```{r}
+# Filter for top tickers and select only date, ticker, and return columns
+filtered_returns <- stocks |>
+  filter(ticker %in% top_tickers) |>
+  select(date, ticker, return) |>
+  na.omit()                                        # Remove rows with NA values in the return column
+
+# Pivot the data to wide format
+wide_returns <- filtered_returns |>
+  pivot_wider(names_from = ticker, values_from = return)
+
+# checking that all columns are numeric
+wide_returns <- wide_returns |> 
+  mutate(across(where(is.numeric), as.numeric))
+
+# Remove rows with any NA values
+wide_returns <- na.omit(wide_returns)
+
+# Check the data
+print(wide_returns)
+
+# Step 3: Initialize the covariance matrix
+num_tickers <- ncol(wide_returns) - 1  # Exclude the date column
+cov_matrix <- matrix(0, nrow = num_tickers, ncol = num_tickers)
+
+# Step 4: Calculate the covariance for each pair of tickers
+for (i in 1:num_tickers) {
+  for (j in 1:num_tickers) {
+    X <- wide_returns[[i + 1]]                         # adding 1 to skip the date column
+    Y <- wide_returns[[j + 1]]                        
+    mean_X <- mean(X)
+    mean_Y <- mean(Y)
+    n <- length(X)
+    cov_XY <- sum((X - mean_X) * (Y - mean_Y)) / (n - 1)
+    cov_matrix[i, j] <- cov_XY
+    if (i != j) {
+      cov_matrix[j, i] <- cov_XY                      # Covariance is symmetric 
+    }
+  }
+}
+
+# Add the wide return column names to the matrix
+ticker_names <- colnames(wide_returns)[-1]           # Excluding the date column
+dimnames(cov_matrix) <- list(ticker_names, ticker_names)
+
+# Printing the covariance matrix
+print(cov_matrix)
+```
+
+( I manually calculated covariance because I was having trouble with the function) Now I will extract the pairs with a covariance of or less. This ensures I will a diverse portfolio and that if market shifts occur, they will not all react in the same way.
+
+```{r}
+# Identifing the pairs with covariance values <= 0
+negative_cov_pairs <- which(cov_matrix <= 0, arr.ind = TRUE)
+
+# Extract the ticker names for the pairs
+ticker_names <- rownames(cov_matrix)
+negative_cov_pairs_names <- data.frame(
+  Ticker1 = ticker_names[negative_cov_pairs[, 1]],
+  Ticker2 = ticker_names[negative_cov_pairs[, 2]],
+  Covariance = cov_matrix[negative_cov_pairs]
+)
+
+# Remove duplicate pairs (since covariance is symmetric)
+# Sort the pairs to ensure symmetry is handled correctly
+negative_cov_pairs_names <- negative_cov_pairs_names |>
+  filter(Ticker1 != Ticker2) |>                         # Remove self-pairs
+  mutate(SortedPair = paste(pmin(Ticker1, Ticker2), pmax(Ticker1, Ticker2))) |>
+  distinct(SortedPair, .keep_all = TRUE) |>
+  select(-SortedPair)
+
+# Print the pairs with covariance values <= 0
+print(negative_cov_pairs_names)
+```
+
+From this aggregation, I will take 5 stocks from each level of covariance totaling to 20 stocks: 1. AIG US Equity 2. CHCR US Equity 3. GSS US Equity 4. IMCI US Equity 5. MUX US Equity 6. CRK US Equity 7. NROM US Equity 8. STRL US Equity 9. VGZ US Equity 10. AMSWA US Equity 11. ZIXI US Equity 12. AXR US Equity 13. NIMU US Equity 14. RELV US Equity 15. RGEN US Equity 16. CVA US Equity 17. BIIB US Equity 18. DBD US Equity 19. IEC US Equity 20. IHT US Equity
+
+Now that I have my portfolio, I will handle the missing values present.
+
+## Handling Missing Values & Imputation Strategy
+
+### Duplicate Rows
+
+I will filter the Dataset by my portfolio to check duplicates within this subset of data.
+
+```{r}
+# create vector of stocks in portfolio
+stocks_port <- c('AIG US Equity', 'ZIXI US Equity', 'GSS US Equity', 'IMCI US Equity',	'MUX US Equity', 'CRK US Equity', 'NROM US Equity', 'STRL US Equity', 'VGZ US Equity', 'AMSWA US Equity', 'CHCR US Equity', 'AXR US Equity', 'NIMU US Equity','RELV US Equity','RGEN US Equity', 'CVA US Equity', 'BIIB US Equity', 'DBD US Equity', 'IEC US Equity', 'IHT US Equity')
+
+# Creating portfolio by filtering my stocks tsibble by my list of stocks
+portfolio <- stocks |>
+  filter(ticker %in% stocks_port)
+
+# Drop unused factor levels in ticker
+portfolio$ticker <- droplevels(portfolio$ticker)
+levels(portfolio$ticker)
+```
+
+Now, checking for duplicates
+
+```{r}
+portfolio |>
+  count(date, ticker) |>                         # Counting the number of date and ticker combinations
+  filter(n > 1)                                  # Keeping all the combinations that occur more than once
+```
+
+We can see that 0 rows have been retained, which means there are no duplicates.
+
+### Assesing Missing Values
+
+Checking the count and proportion of missing values
+
+```{r}
+missing_names <- colSums(is.na(portfolio)) |>                                # Sum the number of null values in each column
+  data.frame() |>                                                         # Convert to DataFrame
+  rownames_to_column("column name") |>                                    # Creating a column, "column name" and putting all row names in it
+  `colnames<-` (c("column name", "missing_count")) |>                     # Changing column names to "column name" and "missing_count"
+  mutate(missing_proportion = (missing_count / nrow(portfolio)) * 100) |>    # Calculating the percentage of missing values and saving it in a column called 'missing_proportion'
+  filter(missing_proportion > 0)  |>                                      # Only show features with missing values
+  arrange(desc(missing_proportion))                                       # Filter in descending order
+
+missing_names                                                             # Show the DataFrame
+```
+
+### Conclusion
+
+Overall remarks: There is very significant number of missing values in the ghg_s1-s3 (\> 93% in all three). Debt to equity, price to book, and profitability have some missing values, but not significant amounts. Revenue and volatility, there are very missing values.
+
+Imputation Strategies: 1. In this situation it is not ideal to impute such a high number of missing values because the data will represent too much synthetic data (ghg1-3). For these three columns, I will drop them and continue my analysis with out them. Neural networks can function with missing data, therefore I will retain the small percentage of NA values in the non ghg columns. Since my Dataset is relatively small with only 20 stocks I want to retain as many rows as possible. For further analysis, I will impute the few missing values present in the internal descriptors of the tickers. I will use KNN, because it will use distances to impute which I believe is more logical than other standard forms of imputation(mean, median, mode).
+
+```{r}
+# Removing all three ghg columns 
+portfolio <- portfolio |> 
+  select(!starts_with("ghg_"), -year)                    # Backwards selecting year since it was created earlier and using the starts with function to select all three ghg columns
+
+# Specify the columns with missing data
+columns_with_missing <- c("market_cap", "price_to_book", "debt_to_equity", "profitability", "volatility", "revenue")
+
+# Ensure the columns with missing data are numeric
+portfolio[columns_with_missing] <- lapply(portfolio[columns_with_missing], function(x) as.numeric(as.character(x)))
+
+# Ensure the data frame is properly formatted
+portfolio <- as.data.frame(portfolio)
+
+# Preprocess the data using KNN imputation
+preProcess_model <- preProcess(portfolio[columns_with_missing], method = "knnImpute")
+
+# Apply the imputation to the portfolio data frame
+portfolio_imputed <- predict(preProcess_model, portfolio[columns_with_missing])
+
+# Combine the imputed columns back with the original data frame
+portfolio[columns_with_missing] <- portfolio_imputed
+
+# checking imputation
+summary(portfolio)
+
+```
+
+```{r}
+# i will convert the data back to a tsibble.
+portfolio <- as_tsibble(portfolio, index = "date", key = "ticker")
+class(portfolio)
+```
+
+## Visualization of the Portfolio
+
+### Time plots
+
+***Simple time plots for each stock in the portfolio*** I will first visualize the prices over time for each ticker in portfolio
+
+```{r}
+# creating a frame with only price, ticker, and date for simplicity
+portfolio_prices <- portfolio |>
+  select(ticker, date, price)
+
+# Creating a vector of colors so that each plot (ticker) has a different color line
+colors <- c('#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd',
+            '#8c564b', '#e377c2', '#7f7f7f', '#bcbd22', '#17becf',
+            '#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd',
+            '#8c564b', '#e377c2', '#7f7f7f', '#bcbd22', '#17becf')
+
+# Loop through each ticker and create individual plots
+for (i in seq_along(stocks_port)) {
+  ticker <- stocks_port[i]
+  color <- colors[i]
+
+  ticker_data <- portfolio_prices |>
+    filter(ticker == !!ticker) |>
+    select(date, price)
+
+  ticker_xts <- as.xts(ticker_data$price, order.by = ticker_data$date)
+  colnames(ticker_xts) <- ticker
+
+  # Create the Highcharts plot for the current ticker
+  hc <- highchart(type = "stock") |>
+    hc_title(text = paste("Price of", ticker)) |>
+    hc_add_series(ticker_xts, color = color) |>
+    hc_tooltip(pointFormat = '{series.name}: {point.y:.2f}') |>
+    hc_yAxis(title = list(text = "Price"), opposite = FALSE) |>
+    hc_xAxis(type = "datetime")
+
+  # Print plots
+  print(hc)
+}
+
+```
+
+Here is an aggregated (Average) view of the portfolios prices over time
+
+```{r}
+# Calculate the average price for each date
+average_prices <- portfolio_prices |>
+  index_by(date) |>
+  summarise(average_price = mean(price, na.rm = TRUE))
+
+
+# Convert to xts object for Highcharts
+average_prices_xts <- as.xts(average_prices$average_price, order.by = average_prices$date)
+colnames(average_prices_xts) <- "Average Price"
+
+# Check the result of average_prices_xts
+print(average_prices_xts)
+
+# Create the Highcharts plot for the average price over time
+hc <- highchart(type = "stock") |>
+  hc_title(text = "Average Price of Portfolio Stocks Over Time") |>
+  hc_add_series(average_prices_xts, name = "Average Price") |>
+  hc_tooltip(pointFormat = '{series.name}: {point.y:.2f}') |>
+  hc_yAxis(title = list(text = "Average Price"), opposite = FALSE) |>
+  hc_xAxis(type = "datetime")
+
+# Print the plot
+print(hc)
+```
+
+Interpretation:
+
+***1. Individual Plots:*** We can see over the history that this portfolio is well diversified. Some stocks prices fall significantly over time (AIG US EQUITY, CHCR US EQUITY, GSS US EQUITY, IMCI US EQUITY, ). Other tickers prices increase significantly after 2014, such as RGEN US EQUITY, BIIB US EQUITY. Others increase in the early 2000s and stay relatively high and stable (CVA US EQUITY). Others have significant spikes and falls throughout the mid 2010s (MUX US EQUITY, CRK US EQUITY). This all shows 1. the diversity of the portflio, and 2. the fact that ***Prices*** are volatile and not stationary.
+
+***2. Overall trend:*** Looking at the aggregated prices over time, we can comment on the general trend of the portfolio with some specific observations. There is an initial high yet volatile price. then around 2002, the portfolio declines and then stabilizes. We can see the impact of the financial crisis on the portfolio which is characterized by a sharp decline. After 2010, we can see a more stable and lower average price. This indicates a more stable market environment. We do not see a significant decline as a result of COVID as we did with the 2008 crisis.
+
+Now, I will visualize each tickers returns over time
+
+```{r}
+# creating a frame with only returns, ticker, and date for simplicity.
+portfolio_returns <- portfolio |>
+  select(ticker, date, return)
+
+# Creating a vector of colors so that each plot (ticker) has a different color line
+colors <- c('#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd',
+            '#8c564b', '#e377c2', '#7f7f7f', '#bcbd22', '#17becf',
+            '#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd',
+            '#8c564b', '#e377c2', '#7f7f7f', '#bcbd22', '#17becf')
+
+# Loop through each ticker and create individual plots
+# Loop through each ticker and create individual plots
+for (i in seq_along(stocks_port)) {
+  ticker <- stocks_port[i]
+  color <- colors[i]  # Ensure the correct color is assigned
+
+  ticker_data <- portfolio_returns |>
+    filter(ticker == !!ticker) |>
+    select(date, return)
+
+  ticker_xts <- as.xts(ticker_data$return, order.by = ticker_data$date)
+  colnames(ticker_xts) <- ticker
+
+  # Using Highchart to create a plot for each ticker
+  hc <- highchart(type = "stock") |>
+    hc_title(text = paste("Returns of", ticker)) |>
+    hc_add_series(ticker_xts, color = color) |>  # Ensure the correct color is used
+    hc_tooltip(pointFormat = '{series.name}: {point.y:.3f}') |>
+    hc_yAxis(title = list(text = "Returns"), opposite = FALSE) |>
+    hc_xAxis(type = "datetime")
+
+  print(hc)  # Displaying plots
+}
+```
+
+***1. Individual Ticker Return Assessment:*** Here we can see a more 'stationary' view of each ticker through the stocks returns. Again, we see moments of relative stability and high volatility. Especially more volatility corresponding to moments of financial crisis (the dot com bubble, 2008, 2020).
+
+-   Note: ***Stationarity*** is a crucial assumption in time series analysis, as it simplifies modeling by ensuring that statistical properties remain constant over time. Transforming non-stationary data, such as stock returns, into a stationary form by removing trends or cyclical components improves the accuracy and reliability of predictive models, as these models are better equipped to handle data with consistent statistical properties. We must confirm stationary through a variety of tests. If the data is stationary, we can continue with our analysis. If it is not, we must differentiate the data.
+
+### Distribution of each of the tickers
+
+Now I will analyze each tickers distribution of returns as some are more significantly volatile.
+
+```{r, fig.width = 12, fig.height = 6}
+portfolio |>
+  ggplot(aes(x = return, fill = ticker)) +
+  geom_histogram(bins = 30, alpha = 0.7, position = "identity") +
+  facet_wrap(vars(ticker), scales = "free") +
+  theme_bw() +
+  theme(axis.title = element_blank(),
+        legend.position = "none") +
+  labs(title = "Histograms of Returns for Each Ticker",
+       x = "",
+       y = "")
+```
+
+## Time Series Decomposition
+
+-   I will decompose Prices and Returns get a better understanding of the underlying trends of my data. I chose to use prices to better understand seasonality and trends in a non stationary metric giving me direct interpretation. Likewise, the advantage of decomposing returns allows me to analyze a stationary metric and give me an additional insight into the volatility that is present.
+
+-   I will choose the first 10/20 tickers to decompose both price and returns on.
+
+I will only perform STL because: 1. The season window is adjustable 2. It is flexible with seasonality and can handle strengthening or weakening seasonality changes over time 3. No linear assumption 4. Equipt for non fixed periodicity 5. Robustness to outliers
+
+-   I will take the log of price for easier interpretation and because there are no negative prices.
+
+### STL Decompostion
+
+```{r}
+# Select the first 10 tickers in the portfolio
+selected_tickers <- head(stocks_port, 10)
+
+# Function to perform STL decomposition and plot for a single ticker
+decompose_and_plot_ticker <- function(data, ticker, variable_name, title) {
+  # Prepare the data for the selected ticker
+  ticker_data <- data |>
+    filter(ticker == !!ticker) |>
+    fill_gaps(.full = TRUE) |>
+    mutate(
+      price = na.interp(price),                   # Interpolate NA values in price (only for decomposition purposes)
+      log_price = log(price),                     # Log-transform prices 
+      return = na.interp(return)                        # Interpolate NA values in return-- this is needed for function to run (although there are no missing values)
+    )
+
+  # STL decomposition
+  decomposition <- ticker_data |>
+    model(STL(!!sym(variable_name) ~ season(window = 25))) |>    # adjusting window 
+    components()
+
+  # Create and print decomposition plot 
+  print(autoplot(decomposition) + ggtitle(title))
+}
+
+# call func to loop through each ticker from ticker vector and perform STL decomposition
+for (ticker in selected_tickers) 
+  {
+    # STL decomposition for log-transformed prices
+    decompose_and_plot_ticker(data = stocks, ticker = ticker, variable_name = "log_price", title = paste("STL Decomposition of Log-Transformed Prices for", ticker))
+
+    # STL decomposition for returns
+    decompose_and_plot_ticker(data = stocks, ticker = ticker, variable_name = "return", title = paste("STL Decomposition of Returns for", ticker))
+  }
+```
+
+***STL Decomposition Return Interpretations*** STRL US EQUITY: - Relatively stable return but shows some volatility around 2008-2009. - The yearly seasonal component captures consistent patterns with peaks and troughs occurring at regular intervals each year. This suggests that there are annual seasonal effects in the returns, possibly due to factors like earnings reports, dividend payments, or other annual events. - The trend component shows the long-term movement in the return series after removing the seasonal effects and noise. we can still see a noticeable dip after the 2008 crisis followed by a phase of recovery. - Weekly seasonal patterns are weakly captured. - The remainder component captures the random noise or variations not explained by the trend and seasonal components. After 2010, the remainder appears to stabilize with some fluctuations. However, it is clear there is noise in the data.
+
+VGZ US EQUITY: - We see a repetitive cyclical pattern in the yearly seasonal composition. - The price component shows shows some fluctuations but compared to other tickers it is much more stable around 0. - Weekly seasonal patterns are weakly captured. - The remainder component represents the residual or noise in the data. It captures any fluctuations in the returns that are not explained by the trend or seasonality. - The trend component shows many small positive fluctuations and 2 larger declines (2008 and 2013).
+
+***STL Decomposition Log-Price Interpretations*** STRL US EQUITY: - We can see the stock price has significantly increased over time with some fluctuations and stabilization after the mid 2000s. We can say that the price increased throughout this period by \~ 2612.7%. %ΔPrice=(e\^3.5 /e\^0.2 − 1) x 100 - The trend shows the stock is moving in an overall positive direction, as it increases throughout the years and is reflective of the log-price component. - We can see distinct yearly cycles with a small magnitude indicating weak seasonality. - The weekly seasonal component is weak. However, there are some sharp peaks which indicates some systematic weekly behavior. - The remainder is relatively stable, but there are occasional spikes, potentially corresponding to major market shocks or company-specific news.
+
+VGZ US EQUITY: - In comparison to the returns, we can see that the yearly seasonality is more pronounced. - The price is very reflective of the trend with more volatility. We can say that from 1995 to 2022, where the log price went from about 2.5 to close to 0, the price decreased \~ 91%, which is very significant. %ΔPrice= (e\^0 / e\^2.5 - 1 ) x 100 - The weekly seasonal pattern is very similar to the returns weekly composition. The weekly seasonality shows - The trend component reflects a significant decline from 1995 to the early 2000s and stable and low long term movement with a small decline in the mid 2010s. - We can see a lot of noise in the remainder (many irregular fluctuations) which asserts a level of market instability.
+
+***Overall, it was interesting to look at both price and return decomposition as they showed slightly different aspects about the ticker in the market.***
+
+Taking the log of price before decomposition allowed for better assessment of yearly seasonality. I previously decomposed without taking the log and the seasonality was much more heterskedastic.
+
+## Determining Stationarity
+
+### Tests for Stationarity:
+
+***1. Augmented Dickey-Fuller test (ADF)*** H₀: The time series is non-stationary. H₁: The time series is stationary.
+
+```{r}
+# Checking stationarity for price, volatility, returns
+# Extracting the return column as a vector
+return_vector <- portfolio$return
+
+# Run the ADF test
+adf_result <- adf.test(return_vector)
+
+# show the results
+adf_result
+```
+
+***ADF test conclusion:*** Given the very small p-value (much smaller than 0.05), the null hypothesis can be rejected that the series has a unit root, meaning that the series is stationary. The lag order is 66 which means the test used 66 lags of the differenced series. The large negative value of the ADF test statistic indicates strong evidence against the null hypothesis.
+
+***2. Kwiatkowski-Phillips-Schmidt-Shin (KPSS) test***, which tests for stationarity around a deterministic trend. H₀: The series is stationary around a mean or trend. H₁: The series is non-stationary.
+
+```{r}
+# Conduct KPSS test
+kpss_result <- kpss.test(return_vector)
+# Show KPSS results
+kpss_result
+```
+
+***KPSS test conclusion:*** The P-value is 0.1 which is \> 0.05. This suggests failure to reject H₀, implying the data is stationary.
+
+## AutoCorrelation and Partial AutoCorrelation
+
+***Autocorrelation*** measures the correlation of a time series with its lagged values.
+
+### Autocorrelation Tests
+
+***Durbin-Watson Test*** H₀: There is no autocorrelation in the residuals. H₁: Residuals exhibit autocorrelation.
+
+```{r}
+# saving the test in a variable
+dw <- lm(return_vector ~ seq_along(return_vector))
+
+# 2-sided Durbin-Watson test
+dwtest(dw)
+```
+
+***Interpretation:*** The p-value indicates there is ***no autocorrelation*** of residuals. The Durbin-Watson Statistic (d) is between a range of 0-4. In our case, d≈2 which further confirms our null hypothesis: no autocorrelation.
+
+***Ljung-Box Test:*** H₀: There is significant autocorrelation at the specified lags H₁: No significant autocorrelation at the tested lags
+
+```{r}
+# test at lag 1
+Box.test(return_vector, type = "Ljung-Box")
+# test at lag 12 (choosing 12 because I have monthly data)
+Box.test(return_vector, type = "Ljung-Box", lag = 12)
+```
+
+***Interpretation:*** The p-value at lag= 1 and lag = 12 are significantly smaller than p = 0.05, meaning from lag 1-12 there is statistically significant autocorrelation. This result suggests that there is a time-dependent structure in the data.
+
+### ACF Plot of Returns
+
+```{r}
+# Plot ACF for a time series
+acf(return_vector, main = "ACF of Returns")
+```
+
+Interpretation: At lag 0, the autocorrelation is always 1 because a series is perfectly correlated with itself. For this series, the bars at all other lags are within the confidence bounds, indicating no statistically significant autocorrelation for lags greater than 0. We see constant autocorrelation over time.
+
+The ACF plot shows exponential decay, asserting an autoregressive process.
+
+```{r, fig.width = 12, fig.height = 6}
+# Calculate ACF for each stock and organize the results into a tidy format
+portfolio_acf <- portfolio |>
+  na.omit() |>                                 # Remove rows with NA values
+  group_split(ticker) |>                         # Split by ticker
+  map(~ {
+    if (nrow(.x) > 0) {                         # Check if the data frame has rows
+      acf_result <- acf(.x$return, plot = FALSE) # Calculate ACF only if there are observations
+      data.frame(lag = acf_result$lag, acf = acf_result$acf, ci = qnorm(0.975) / sqrt(acf_result$n.used))
+    } else {
+      data.frame(lag = numeric(), acf = numeric(), ci = numeric()) # Return an empty data frame if no observations
+    }
+  }) |>
+  bind_rows(.id = "ticker")                       # Combine results into a data frame
+
+# Print the resulting data frame
+print(portfolio_acf)
+portfolio_acf |> 
+  filter(lag > 0, lag < 6) |>             # Focus on lags 1 to 5
+  ggplot(aes(x = lag, y = acf, fill = ticker)) + 
+  geom_col(position = "dodge") +          # Create a dodged bar chart
+  theme_bw() +                            # Apply a clean theme
+  labs(
+    title = "Autocorrelation of Stock Returns",
+    x = "Lag",
+    y = "Autocorrelation",
+    fill = "Stock Ticker"
+  )
+
+```
+
+Observations: High Positive Autocorrelation: For example, the stock represented by the red color (AIG US Equity) shows a high positive autocorrelation at lag 5. This suggests that the returns of this stock at lag 5 are strongly positively correlated with its current returns. High Negative Autocorrelation: The stock represented by the dark green color (CRK US Equity) shows a high negative autocorrelation at lag 1. This suggests that the returns of this stock at lag 1 are strongly negatively correlated with its current returns. Fluctuations: The autocorrelation values fluctuate across different lags for each stock, indicating varying degrees of correlation between past and future returns at different time intervals.
+
+### Partial Autocorrelation
+
+***PACF:*** Measures the correlation between the series and its lag, adjusting for the intermediate lags.
+
+```{r}
+pacf(return_vector, main="Partial Autocorrelation Function")
+```
+
+We can see a low PACF at 11 and 12 lags. We can see inconsistent intervals of larger spikes, which asserts stronger partial auto correlations. However, since they are not cyclical, I don't think adding a separate lag to adjust for 6 month periods is helpful.
+
+PCAF shows a slight gradual decay with many fluctuations and no clear cut off. Asserting more of a mixed model (ARMA) process.
+
+## Feature Engineering
+
+### Lag
+
+Because my data is proven to have a time-dependent structure, I will lag return values in order to shift the time dependencies of the data. I am choosing to do 12 lags because in the decomposition, the yearly decomposition clearly showed cyclical annual patterns.
+
+```{r}
+lagged_portfolio <- portfolio |>           # saving into a new tsibble
+  group_by(ticker) |>         # Group by ticker
+  mutate(                     # creating 12 lags
+    lag1 = lag(return, 1),                   
+    lag2 = lag(return, 2),
+    lag3 = lag(return, 3),
+    lag4 = lag(return, 4),
+    lag5 = lag(return, 5),
+    lag6 = lag(return, 6),
+    lag7 = lag(return, 7),
+    lag8 = lag(return, 8),
+    lag9 = lag(return, 9),
+    lag10 = lag(return, 10),
+    lag11 = lag(return, 11),
+    lag12 = lag(return, 12)   
+  ) |>
+  ungroup()                  # Ungroup after mutation
+
+# Confirm returns were properly lagged
+print(lagged_portfolio)
+```
+
+### Log Price
+
+```{r}
+# replacing the price column with a log price
+lagged_portfolio <- lagged_portfolio |>
+  mutate(log_price = log(price)) |>  # Create a new column 'log_price'
+  select(-price) # remove old price col
+```
+
+### Moving Standard Deviation & Average
+
+Incorporating Rolling Features in Neural Networks can have many benefits. It can reduce the noise in the input data which can lead to better generalization as well as enhance model ability to detect trends and volatility patterns.Thus, I will calculate Rolling Standard Deviation and Average which can make the unique trend and seasonal effects available for the model to learn from.
+
+```{r}
+window_size <- 20  # Define the window size
+
+lagged_portfolio <- lagged_portfolio |>
+  group_by(ticker) |>  # Group by ticker
+  mutate(
+    MovingSD = slide_dbl(.x = return, sd, .before = window_size - 1, .complete = TRUE),
+    MovingMean = slide_dbl(.x = return, mean, .before = window_size - 1, .complete = TRUE)
+  ) |>
+  ungroup()  # Ungroup the data
+
+# View the result
+head(lagged_portfolio)
+```
+
+### Removing resulting NA from new columns
+
+I will remove the NA values that have been created by lagging because models do not allow for NA values. This removal is insignificant to the total model, because time series isnt very reliant on super old data, so under this justification, this removal will not effect the my models ability to forecast. The same will be done for the Moving columns. These columns have many initial NA values because they use data from the defined window to create the new values.
+
+```{r}
+lagged_portfolio <- lagged_portfolio |>
+  mutate(any_na = if_any(c(lag1, lag2, lag3, lag4, lag5, lag6, lag7, lag8, lag9, lag10, lag11, lag12, MovingSD, MovingMean), is.na))
+
+# Extract the indices and keys (tickers) where any of the specified columns have NA values
+na_indices <- lagged_portfolio |>
+  filter(any_na) |>
+  select(ticker, date) |>
+  distinct()
+
+# Can see the timer period from eature engineering that resulted in NA values
+print(na_indices)
+
+# Remove the rows from lagged_portfolio that match the rows in na_periods
+lagged_portfolio <- lagged_portfolio |>
+  anti_join(na_indices, by = c("ticker", "date"))|>
+  select(-any_na)
+
+# Print the resulting data frame
+print(lagged_portfolio)
+```
+
+## Individual Ticker Estimations Estimations
+
+### ARIMA
+
+```{r}
+# Create a list to store results for each ticker
+arima_results <- list()
+
+# Iterate over each unique ticker in the portfolio
+for (ticker_symbol in stocks_port) {
+  # Filter data for the specific ticker
+  ticker_data <- portfolio |>
+    filter(ticker == ticker_symbol) |>
+    select(date, return)
+  
+  # Convert the date column to a Date object
+  ticker_data$date <- as.Date(ticker_data$date)
+  
+  # Convert to xts format
+  ticker_ts <- xts(ticker_data$return, order.by = ticker_data$date)
+  
+  # Fit the ARIMA model
+  arima_model <- auto.arima(ticker_ts)
+  
+  # Forecast the next 12 periods
+  forecasted_data <- forecast(arima_model, h = 12)
+  
+  # Store the results in the list
+  arima_results[[ticker_symbol]] <- list(
+    model = arima_model,
+    forecast = forecasted_data
+  )
+  
+  # Print the summary of the model
+  cat("Ticker:", ticker_symbol, "\n")
+  print(arima_model)
+  cat("\n")
+}
+
+```
+
+***Key Observations:*** AIG US Equity has a complex ARIMA(5,0,1) model with strong autocorrelation over multiple lags and a good fit. ZIXI US Equity has a simple random walk model (ARIMA(0,0,0)), reflecting a lack of structure or trend in the data. GSS US Equity has a moderate ARIMA(2,0,1) model, with significant influence from the first lag and forecast errors. Other tickers show varying levels of complexity in their ARIMA models, reflecting their unique characteristics. The fact that all these have such different ARIMA results shows the diversity of the portfolio, whether it will perform well or not is to be determined. However, key diversity is present.
+
+### Support Vector Regression
+
+```{r}
+
+# Function to prepare data and train SVR model for a single ticker
+prepare_and_train_svr <- function(data, ticker_symbol) {
+  # Select single ticker and remove NA values
+  single_ticker_data <- data %>%
+    filter(ticker == ticker_symbol) %>%
+    select(-ticker) %>%
+    na.omit()
+  
+  # Store dates for plotting
+  dates <- single_ticker_data$date
+  
+  # Remove date column for modeling
+  modeling_data <- single_ticker_data %>%
+    select(-date)
+  
+  # Split into training and testing sets (80/20)
+  set.seed(123)
+  train_size <- floor(0.8 * nrow(modeling_data))
+  train_data <- modeling_data[1:train_size, ]
+  test_data <- modeling_data[(train_size + 1):nrow(modeling_data), ]
+  
+  
+  # Train SVR model
+  svr_model <- caret::train(
+    return ~ .,
+    data = train_data,
+    method = "svmRadial",
+    trControl = trainControl(
+      method = "cv",
+      number = 5,
+      verboseIter = TRUE
+    ),
+  tuneGrid = expand.grid(
+    sigma = seq(0.001, 1, length.out = 10),
+    C = c(0.1, 1, 10, 100)
+  ),
+  preProcess = c("center", "scale")
+  )
+  
+  # Make predictions
+  train_pred <- predict(svr_model, newdata = train_data)
+  test_pred <- predict(svr_model, newdata = test_data)
+  
+  # Calculate R-squared for both sets
+  train_r2 <- cor(train_pred, train_data$return)^2
+  test_r2 <- cor(test_pred, test_data$return)^2
+  
+  # Combine actual and predicted values with dates for plotting
+  plot_data <- tibble(
+    date = c(dates[1:train_size], dates[(train_size + 1):nrow(modeling_data)]),
+    actual = c(train_data$return, test_data$return),
+    predicted = c(train_pred, test_pred),
+    set = c(rep("Training", length(train_pred)), rep("Testing", length(test_pred)))
+  )
+  
+  # Create Highcharter plot
+  hc_plot <- highchart() %>%
+    hc_title(text = paste("SVR Prediction Results for", ticker_symbol)) %>%
+    hc_xAxis(categories = plot_data$date, title = list(text = "Date")) %>%
+    hc_yAxis(title = list(text = "Return")) %>%
+    hc_add_series(name = "Actual", data = plot_data$actual, type = "line") %>%
+    hc_add_series(name = "Predicted", data = plot_data$predicted, type = "line") %>%
+    hc_tooltip(shared = TRUE, crosshairs = TRUE)
+  
+  # Return results
+  return(list(
+    model = svr_model,
+    train_r2 = train_r2,
+    test_r2 = test_r2,
+    highchart_plot = hc_plot,
+    best_params = svr_model$bestTune
+  ))
+}
+
+# Function to iterate through multiple tickers
+process_multiple_tickers <- function(data, tickers) {
+  results_list <- list()
+  for (ticker in tickers) {
+    cat("Processing ticker:", ticker, "\n")
+    result <- prepare_and_train_svr(data, ticker)
+    results_list[[ticker]] <- result
+    print(result$highchart_plot)
+  }
+  return(results_list)
+}
+```
+
+Calling the function and storing its results
+
+```{r}
+all_results <- process_multiple_tickers(lagged_portfolio, stocks_port)
+
+# Printing results
+print(all_results)
+```
+
+***Remarks:*** Among the different tickers, we can see different levels of performance in terms of test and validation sets. In all cases the train was better than the test. However the difference significantly varied from ticker to ticker. For example, DBD US Equity train R2 value was 0.525708 but had a test R2 of 0.006039629 which indicates significant overfitting. Other tickers had stable yet poor performance. For example, IEC US Equity had a train R2 of 0.02078148 and a test R2 of 0.01580176. This example shows significantly less overfitting, yet still a poor fit to the data.
+
+In the way that each ticker perfomed differently, the paramaters for each ticker were drastically different. The C (Regularization Parameter): Controls the trade-off between achieving a low error on the training set and minimizing model complexity to prevent overfitting. We can see that some tickers had a C = .1 and others C = 100, asserting the complex trade off between bias and variance present in the model for each ticker in the portfolio. ***Overall***, we can see how the model struggles to generalize to a single ticker within the portfolio. Now, I will forecast aggregated portfolio returns.
+
+## Portfolio Returns Forecasts
+
+### Random Forest
+
+```{r}
+# Function to prepare data and train Random Forest model
+prepare_and_train_rf <- function(data, forecast_years = 3) {
+  # Convert to tibble
+  data_tbl <- as_tibble(data)
+
+  # Calculate average monthly returns across all tickers
+  portfolio_returns <- data_tbl |>
+    mutate(date = as.Date(date)) |>
+    group_by(yearmonth = yearmonth(date)) |>                    # Group by year and month
+    summarize(return = mean(return, na.rm = TRUE), .groups = "drop") |>
+    arrange(yearmonth)
+
+  # Convert `yearmonth` back to Date for compatibility
+  portfolio_returns <- portfolio_returns %>%
+    mutate(date = as.Date(yearmonth)) %>%
+    select(-yearmonth)
+
+  # Store dates for plotting
+  dates <- portfolio_returns$date
+
+  # Prepare feature matrix
+  X <- portfolio_returns %>%
+    mutate(
+      month = month(date),
+      year = year(date)
+    ) %>%
+    select(-date, -return)  # Exclude date and target variable `return`
+
+  # Target variable
+  y <- portfolio_returns$return
+
+  # Scale features
+  preprocess_params <- preProcess(X, method = c("center", "scale"))
+  X_scaled <- predict(preprocess_params, X)  # Only apply scaling to X
+
+  # Split data into training and testing sets 
+  n <- nrow(X_scaled)
+  train_size <- floor(0.8 * n)                      # First 80% of the rows for training
+
+  X_train <- X_scaled[1:train_size, ]
+  X_test <- X_scaled[(train_size + 1):n, ]
+  y_train <- y[1:train_size]
+  y_test <- y[(train_size + 1):n]
+  train_dates <- dates[1:train_size]
+  test_dates <- dates[(train_size + 1):n]
+
+  # Train Random Forest model
+  set.seed(123)
+  rf_model <- randomForest(
+    x = X_train,
+    y = y_train,
+    ntree = 500,         # Number of trees
+    mtry = floor(sqrt(ncol(X_train))),  # Number of variables randomly sampled at each split
+    importance = TRUE    # Enable calculation of feature importance
+  )
+
+  # Make predictions
+  train_pred <- predict(rf_model, X_train)
+  test_pred <- predict(rf_model, X_test)
+
+  # Calculate R-squared
+  train_r2 <- cor(train_pred, y_train)^2
+  test_r2 <- cor(test_pred, y_test)^2
+
+  # Prepare data for historical plot
+  plot_data <- tibble(
+    date = c(train_dates, test_dates),
+    actual = c(y_train, y_test),
+    predicted = c(train_pred, test_pred),
+    set = c(rep("Training", length(train_pred)), rep("Testing", length(test_pred)))
+  )
+
+  # Create historical plot
+  historical_plot <- ggplot(plot_data, aes(x = date)) +
+    geom_line(aes(y = actual, color = "Actual"), size = 0.8) +
+    geom_line(aes(y = predicted, color = "Predicted"), size = 0.8) +
+    geom_vline(xintercept = as.numeric(max(train_dates)),  # Vertical line reflects training data end
+               linetype = "dashed", color = "gray50") +
+    labs(title = "Portfolio Return Prediction Results",
+         x = "Date",
+         y = "Return",
+         color = "Legend") +
+    theme_minimal() +
+    theme(legend.position = "bottom")
+
+  # Generate future dates for forecasting
+  last_date <- max(dates)
+  future_dates <- seq(last_date + months(1), last_date + years(forecast_years), by = "month")
+
+  # Create feature matrix for future prediction
+  future_features <- tibble(
+    date = future_dates,
+    month = month(future_dates),
+    year = year(future_dates)
+  )
+
+  # Scale future features
+  future_features_scaled <- predict(preprocess_params, future_features |> select(-date))
+
+  # Make future predictions
+  future_pred <- predict(rf_model, future_features_scaled)
+
+  # Create forecast plot
+  forecast_data <- tibble(
+    date = future_dates,
+    predicted = future_pred,
+    set = "Forecast"
+  )
+
+  forecast_plot <- ggplot(forecast_data, aes(x = date, y = predicted)) +
+    geom_line(color = "blue", size = 0.8) +
+    labs(title = "Forecast of Portfolio Returns",
+         x = "Date",
+         y = "Return",
+         color = "Legend") +
+    theme_minimal() +
+    theme(legend.position = "bottom")
+
+  # Return results
+  return(list(
+    model = rf_model,
+    train_r2 = train_r2,
+    test_r2 = test_r2,
+    historical_plot = historical_plot,
+    forecast_plot = forecast_plot
+  ))
+}
+```
+
+```{r}
+# calling function 
+results_rf <- prepare_and_train_rf(lagged_portfolio)
+
+# Print metrics
+cat("Training R-squared:", results_rf$train_r2, "\n")
+cat("Test R-squared:", results_rf$test_r2, "\n")
+
+# Display plots
+print(results_rf$historical_plot)
+print(results_rf$forecast_plot)
+```
+
+***Remarks:*** In comparison to the Light GBM, the train score was significantly higher, although the test score was a bit lower. This indicates a little more overfitting. Looking at train and test plot, the model does not accurately hit the drop in 2020, which is to be expected, although it shows a slight dip which is somewhat significant given it was an unforeseen event.
+
+### Light Graident Boosting Model (Light GBM)
+
+```{r}
+# Function to prepare data and train LightGBM model
+prepare_and_train_lgbm <- function(data, forecast_years = 3) {
+  # Convert to tibble to avoid tsibble index conflicts
+  data_tbl <- as_tibble(data)
+  
+  # Calculate average monthly returns across all tickers
+  portfolio_returns <- data_tbl |>
+    mutate(date = as.Date(date)) |>
+    group_by(yearmonth = yearmonth(date)) |>  # Group by year and month
+    summarize(return = mean(return, na.rm = TRUE), .groups = "drop") |>
+    arrange(yearmonth)
+  
+  # Convert `yearmonth` back to Date for compatibility
+  portfolio_returns <- portfolio_returns |>
+    mutate(date = as.Date(yearmonth)) |>
+    select(-yearmonth)
+  
+  # Store dates for plotting
+  dates <- portfolio_returns$date
+  
+  # Prepare feature matrix
+  X <- portfolio_returns |>
+    mutate(
+      month = month(date),
+      year = year(date)
+    ) |>
+    select(-date, -return)  # Exclude date and target variable `return`
+  
+  # Target variable
+  y <- portfolio_returns$return
+  
+  # Scale features
+  preprocess_params <- preProcess(X, method = c("center", "scale"))
+  X_scaled <- predict(preprocess_params, X)  # Only apply scaling to X
+  
+  # Split data into training and testing sets (80/20 split based on time)
+  n <- nrow(X_scaled)
+  train_size <- floor(0.8 * n)  # First 80% of the rows for training
+  
+  X_train <- X_scaled[1:train_size, ]
+  X_test <- X_scaled[(train_size + 1):n, ]
+  y_train <- y[1:train_size]
+  y_test <- y[(train_size + 1):n]
+  train_dates <- dates[1:train_size]
+  test_dates <- dates[(train_size + 1):n]
+  
+  # Define hyperparameter grid
+  param_grid <- expand.grid(
+    learning_rate = c(0.01, 0.05, 0.1),
+    max_depth = c(3, 5, 7),
+    num_leaves = c(15, 31, 63),
+    feature_fraction = c(0.7, 0.8, 0.9),
+    min_data_in_leaf = c(10, 20, 50)
+  )
+  
+  # Cross-validation function
+  cv_lgbm <- function(params) {
+    set.seed(123)
+    cv_folds <- createFolds(y_train, k = 5)
+    cv_scores <- numeric(5)
+    
+    for (i in seq_along(cv_folds)) {
+      val_idx <- cv_folds[[i]]
+      dtrain <- lgb.Dataset(
+        data = as.matrix(X_train[-val_idx, ]),
+        label = y_train[-val_idx]
+      )
+      dval <- lgb.Dataset(
+        data = as.matrix(X_train[val_idx, ]),
+        label = y_train[val_idx]
+      )
+      
+      model <- lgb.train(
+        params = list(
+          objective = "regression",
+          metric = "rmse",
+          learning_rate = params$learning_rate,
+          max_depth = params$max_depth,
+          num_leaves = params$num_leaves,
+          feature_fraction = params$feature_fraction,
+          min_data_in_leaf = params$min_data_in_leaf
+        ),
+        data = dtrain,
+        valids = list(valid = dval),
+        nrounds = 1000,
+        early_stopping_rounds = 50,
+        verbose = -1
+      )
+      
+      pred <- predict(model, as.matrix(X_train[val_idx, ]))
+      cv_scores[i] <- cor(pred, y_train[val_idx])^2
+    }
+    
+    return(mean(cv_scores))
+  }
+  
+  # Finding best parameters
+  cv_results <- apply(param_grid, 1, function(row) {
+    params <- as.list(row)  # Convert each row to a named list
+    cv_lgbm(params)
+  })
+  
+  best_params <- param_grid[which.max(cv_results), ]
+  
+  # Train final model with optimal parameters
+  dtrain <- lgb.Dataset(data = as.matrix(X_train), label = y_train)
+  
+  final_model <- lgb.train(
+    params = list(
+      objective = "regression",
+      metric = "rmse",
+      learning_rate = best_params$learning_rate,
+      max_depth = best_params$max_depth,
+      num_leaves = best_params$num_leaves,
+      feature_fraction = best_params$feature_fraction,
+      min_data_in_leaf = best_params$min_data_in_leaf
+    ),
+    data = dtrain,
+    nrounds = 1000,
+    verbose = -1
+  )
+  
+  # Make predictions
+  train_pred <- predict(final_model, as.matrix(X_train))
+  test_pred <- predict(final_model, as.matrix(X_test))
+  
+  # Calculate R-squared
+  train_r2 <- cor(train_pred, y_train)^2
+  test_r2 <- cor(test_pred, y_test)^2
+  
+  # Prepare data for historical plot
+  plot_data <- tibble(
+    date = c(train_dates, test_dates),
+    actual = c(y_train, y_test),
+    predicted = c(train_pred, test_pred),
+    set = c(rep("Training", length(train_pred)), rep("Testing", length(test_pred)))
+  )
+  
+  # Create historical plot
+  historical_plot <- ggplot(plot_data, aes(x = date)) +
+    geom_line(aes(y = actual, color = "Actual"), size = 0.8) +
+    geom_line(aes(y = predicted, color = "Predicted"), size = 0.8) +
+    geom_vline(xintercept = as.numeric(max(train_dates)),              # Vertical line reflects training data end
+               linetype = "dashed", color = "gray50") +
+    labs(title = "Portfolio Return Prediction Results",
+         x = "Date",
+         y = "Return",
+         color = "Legend") +
+    theme_minimal() +
+    theme(legend.position = "bottom")
+  
+  # Generate future dates for forecasting
+  last_date <- max(dates)
+  future_dates <- seq(last_date + months(1), last_date + years(forecast_years), by = "month")
+  
+  # Create feature matrix for future prediction
+  future_features <- tibble(
+    date = future_dates,
+    month = month(future_dates),
+    year = year(future_dates)
+  )
+  
+  # Scale future features
+  future_features_scaled <- predict(preprocess_params, future_features %>% select(-date))
+  
+  # Make future predictions
+  future_pred <- predict(final_model, as.matrix(future_features_scaled))
+  
+  # Create forecast plot
+  forecast_data <- tibble(
+    date = future_dates,
+    predicted = future_pred,
+    set = "Forecast"
+  )
+  
+  forecast_plot <- ggplot(forecast_data, aes(x = date, y = predicted)) +
+    geom_line(color = "blue", size = 0.8) +
+    labs(title = "Forecast of Portfolio Returns",
+         x = "Date",
+         y = "Return",
+         color = "Legend") +
+    theme_minimal() +
+    theme(legend.position = "bottom")
+  
+ return(list(
+    model = final_model,
+    train_r2 = train_r2,
+    test_r2 = test_r2,
+    historical_plot = historical_plot,
+    forecast_plot = forecast_plot,
+    best_params = best_params
+  ))
+}
+```
+
+Now I will analyze the results of the model
+
+```{r}
+# call function and save it in variable
+results_lgbm <- prepare_and_train_lgbm(lagged_portfolio)
+
+# Print results
+cat("Training R-squared:", results_lgbm$train_r2, "\n")
+cat("Test R-squared:", results_lgbm$test_r2, "\n")
+cat("\nBest hyperparameters:\n")
+print(results_lgbm$best_params)
+
+# Display plots
+print(results_lgbm$historical_plot)
+print(results_lgbm$forecast_plot)
+```
+
+***Remarks:*** The forecasted portfolio returns model generalizes about the same as the individual tickers. The model is certainly overfitting. We can see from the learning rate, that the model is taking small steps. However, due to max_depth = 3, the tree is pretty shallow which decreases model complexity. Num_leaves = 15 asserts a good balance of complexity, which should also increase its ability to generalize. Feature Fraction (0.8) introduces randomness to prevent overfitting while still using a majority of the features. Overall, with hypertuning, the model should be able to generalize to the new data, yet it predicts future returns poorly.
+
+## Conclusions
+
+***Future suggestions:*** A different portfolio strategy. Rather than selection tickers based on covariance, it is more beneficial to select tickers more high returns (although I have done a combination of the two, I feel it was not adequate). Potentially a good way to go about creating a high returning portfolio would be to use a model like SVR and forecast future returns. Based off those forecasts, you can then use descriptive and prescriptive analysis in conjunction to make a decision.
+
+The best tuned models were Light GBM and Random Forest Regression.
+
+## Appendix
+
+### Sources
+
+-   https://www.geeksforgeeks.org/exploring-machine-learning-approaches-for-timeseries/ https://www.kaggle.com/code/konradb/ts-3-time-series-for-finance/notebook
+-   https://towardsdatascience.com/neural-network-mlp-for-time-series-forecasting-in-practice-04c47c1e3711
+-   https://otexts.com/fpp3/
+-   https://perhuaman.wordpress.com/wp-content/uploads/2014/09/analysis-of-financial-time-series-2nd-edition.pdf
+
+### Note
+
+AI was used to optimize plotting, trouble shoot, and for function creation. My work was also supported by the sources mentioned above.
